@@ -7,7 +7,7 @@
     </div>
 
     <!-- Search Form -->
-    <div class="bg-white mx-4 -mt-4 rounded-2xl shadow-lg p-4 mb-6">
+    <div class="bg-white mx-4 -mt-4 rounded-2xl shadow-lg p-4 mb-4">
       <SearchForm @search="handleSearch" />
     </div>
 
@@ -31,21 +31,61 @@
         <PriceCalendar :days="calendarDays" @select="handleCalendarSelect" />
       </div>
 
-      <!-- 指定日期：航班列表 -->
-      <div v-else-if="results.length > 0">
-        <div class="flex items-center justify-between mb-3">
-          <p class="text-sm text-gray-500">找到 {{ results.length }} 筆結果</p>
-          <select v-model="sortBy" class="text-sm border rounded-lg px-2 py-1">
-            <option value="price">價格最低</option>
-            <option value="duration">飛行最短</option>
-          </select>
+      <!-- 有搜尋結果 -->
+      <div v-else-if="results.length > 0 || regionData.regions?.length > 0">
+
+        <!-- Tab 切換 -->
+        <div class="flex gap-2 mb-4">
+          <button
+            data-tab="flights"
+            :class="['flex-1 py-2 rounded-xl text-sm font-semibold transition-colors',
+              activeTab === 'flights' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-500']"
+            @click="activeTab = 'flights'"
+          >航班列表</button>
+          <button
+            data-tab="regions"
+            :class="['flex-1 py-2 rounded-xl text-sm font-semibold transition-colors relative',
+              activeTab === 'regions' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-500']"
+            @click="switchToRegions"
+          >
+            換地區比價
+            <span v-if="regionData.saving > 0 && activeTab !== 'regions'"
+              class="absolute -top-1 -right-1 bg-green-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+              !
+            </span>
+          </button>
         </div>
-        <FlightCard
-          v-for="(flight, i) in sortedResults"
-          :key="i"
-          :flight="flight"
-          class="mb-3"
-        />
+
+        <!-- 航班列表 tab -->
+        <div v-if="activeTab === 'flights'">
+          <div class="flex items-center justify-between mb-3">
+            <p class="text-sm text-gray-500">找到 {{ results.length }} 筆結果</p>
+            <select v-model="sortBy" class="text-sm border rounded-lg px-2 py-1">
+              <option value="price">價格最低</option>
+              <option value="duration">飛行最短</option>
+            </select>
+          </div>
+          <FlightCard
+            v-for="(flight, i) in sortedResults"
+            :key="i"
+            :flight="flight"
+            class="mb-3"
+          />
+        </div>
+
+        <!-- 換地區比價 tab -->
+        <div v-else>
+          <div v-if="regionLoading" class="text-center py-8">
+            <div class="inline-block w-6 h-6 border-4 border-primary border-t-transparent rounded-full animate-spin mb-2"></div>
+            <p class="text-gray-400 text-sm">掃描 7 個地區價格中...</p>
+          </div>
+          <RegionCompare
+            v-else-if="regionData.regions?.length"
+            :regions="regionData.regions"
+            :cheapest="regionData.cheapest"
+            :saving="regionData.saving"
+          />
+        </div>
       </div>
 
       <div v-else-if="searched" class="text-center py-12">
@@ -81,6 +121,10 @@ const calendarDays = ref([])
 const calendarTitle = ref('')
 const searched = ref(false)
 const sortBy = ref('price')
+const activeTab = ref('flights')
+const regionLoading = ref(false)
+const regionData = ref({ regions: [], cheapest: '', saving: 0 })
+const lastQuery = ref(null)
 
 const popularRoutes = [
   { name: '東京', enName: 'Tokyo', code: 'TYO', flag: '🇯🇵' },
@@ -99,6 +143,9 @@ const sortedResults = computed(() => {
 })
 
 async function handleSearch(query) {
+  activeTab.value = 'flights'
+  regionData.value = { regions: [], cheapest: '', saving: 0 }
+  lastQuery.value = query
   if (query.flexMode) {
     await doFlexSearch(query)
   } else {
@@ -110,7 +157,7 @@ async function quickSearch(route) {
   const d = new Date()
   d.setDate(d.getDate() + 30)
   const dateStr = d.toISOString().split('T')[0]
-  await doSearch({ destination: route.enName, date: dateStr, adults: 1 })
+  await handleSearch({ destination: route.enName, destinationId: '', date: dateStr, adults: 1 })
 }
 
 async function doSearch(query) {
@@ -131,7 +178,32 @@ async function doSearch(query) {
   }
 }
 
-// 彈性日期：查詢多個日期，找最便宜
+async function switchToRegions() {
+  activeTab.value = 'regions'
+  if (regionData.value.regions?.length || !lastQuery.value) return
+  await doRegionSearch(lastQuery.value)
+}
+
+async function doRegionSearch(query) {
+  if (!query.destinationId && !query.destination) return
+  regionLoading.value = true
+  try {
+    const data = await $fetch('/api/flights/regions', {
+      params: {
+        destinationId: query.destinationId || query.destination,
+        date: query.date,
+        returnDate: query.returnDate,
+        adults: query.adults || 1,
+      },
+    })
+    regionData.value = data
+  } catch (e) {
+    // 靜默失敗
+  } finally {
+    regionLoading.value = false
+  }
+}
+
 async function doFlexSearch(query) {
   loading.value = true
   loadingText.value = '正在掃描最便宜日期...'
@@ -143,7 +215,6 @@ async function doFlexSearch(query) {
   try {
     const dates = getDateRange(query.flexRange)
     calendarTitle.value = `${query.destination} 價格日曆（${dates.length} 天）`
-
     const data = await $fetch('/api/flights/calendar', {
       params: { destination: query.destination, dates: dates.join(','), adults: query.adults },
     })
@@ -159,17 +230,9 @@ function getDateRange(range) {
   const dates = []
   const start = new Date()
   start.setDate(start.getDate() + 1)
-
-  let days = 30
-  if (range === 'this_month') {
-    const end = new Date(start.getFullYear(), start.getMonth() + 1, 0)
-    days = Math.ceil((end - start) / 86400000)
-  } else if (range === 'next_month') {
-    days = 30
-  } else if (range === '3_months') {
-    days = 90
-  }
-
+  let days = range === 'this_month'
+    ? Math.ceil((new Date(start.getFullYear(), start.getMonth() + 1, 0) - start) / 86400000)
+    : range === '3_months' ? 90 : 30
   for (let i = 0; i < days; i++) {
     const d = new Date(start)
     d.setDate(d.getDate() + i)
