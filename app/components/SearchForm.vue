@@ -108,6 +108,21 @@
     >
       {{ flexMode ? '搜尋最便宜日期' : '搜尋機票' }}
     </button>
+
+    <!-- API 額度顯示 -->
+    <div v-if="quota.remaining !== null" class="mt-3 flex items-center justify-between px-1">
+      <div class="flex items-center gap-2">
+        <div class="w-24 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+          <div
+            class="h-full rounded-full transition-all"
+            :class="quotaColor"
+            :style="{ width: quotaPct + '%' }"
+          ></div>
+        </div>
+        <span class="text-xs text-gray-400">剩餘額度 {{ quota.remaining }} / {{ quota.limit }}</span>
+      </div>
+      <span class="text-xs text-gray-300">{{ resetLabel }}</span>
+    </div>
   </form>
 </template>
 
@@ -175,6 +190,32 @@ function onFocus() {
 function hideDropdown() {
   setTimeout(() => { showDrop.value = false }, 150)
 }
+
+// 額度
+const quota = ref({ limit: null, remaining: null, reset: null })
+
+const quotaPct = computed(() => {
+  if (!quota.value.limit) return 0
+  return Math.round((quota.value.remaining / quota.value.limit) * 100)
+})
+
+const quotaColor = computed(() => {
+  if (quotaPct.value > 50) return 'bg-green-400'
+  if (quotaPct.value > 20) return 'bg-yellow-400'
+  return 'bg-red-400'
+})
+
+const resetLabel = computed(() => {
+  if (!quota.value.reset) return ''
+  const days = Math.ceil(quota.value.reset / 86400)
+  return `${days} 天後重置`
+})
+
+onMounted(async () => {
+  try {
+    quota.value = await $fetch('/api/quota')
+  } catch {}
+})
 
 function submit() {
   dateError.value = ''
